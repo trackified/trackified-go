@@ -19,8 +19,9 @@ type WebhooksService struct{ c *Client }
 
 // CreateWebhookParams is the body of WebhooksService.Create.
 type CreateWebhookParams struct {
-	URL        string             `json:"url"`
-	EventTypes []WebhookEventType `json:"event_types,omitempty"` // empty = all events
+	URL string `json:"url"`
+	// EventTypes defaults to tracking.updated and tracking.delivered when empty.
+	EventTypes []WebhookEventType `json:"event_types,omitempty"`
 }
 
 // Create adds a webhook endpoint. The returned Secret is shown only once; store it to verify signatures.

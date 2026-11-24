@@ -218,3 +218,27 @@ func TestHooks(t *testing.T) {
 		t.Fatalf("responses = %+v", resps)
 	}
 }
+
+func TestWebhookTestRawBodyVerifies(t *testing.T) {
+	pinClock(t, time.Unix(1792560000, 0))
+	// Pretty-printed like the API, with keys out of alphabetical order.
+	resp := `{
+  "delivered": false,
+  "signature": "` + vecHeader + `",
+  "body": {
+    "id": "evt_test",
+    "type": "tracking.updated",
+    "data": {
+      "id": "trk_123"
+    }
+  }
+}`
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(resp)) })
+	r, err := c.Webhooks.Test(context.Background(), "wh_1")
+	if err != nil || r.Body["id"] != "evt_test" || string(r.RawBody) != vecBody {
+		t.Fatalf("Test = %+v (raw %s), %v", r, r.RawBody, err)
+	}
+	if !VerifyWebhook(r.RawBody, r.Signature, vecSecret) {
+		t.Fatal("RawBody should verify")
+	}
+}

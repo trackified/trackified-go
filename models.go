@@ -1,6 +1,7 @@
 package trackified
 
 import (
+	"bytes"
 	"encoding/json"
 	"time"
 )
@@ -206,6 +207,32 @@ type Webhook struct {
 type WebhookTestResult struct {
 	Signature string         `json:"signature"`
 	Body      map[string]any `json:"body"`
+	// RawBody is the exact body that Signature signs (key order kept); pass it to VerifyWebhook.
+	// Re-encoding Body sorts its keys and no longer verifies.
+	RawBody json.RawMessage `json:"-"`
+}
+
+// UnmarshalJSON fills RawBody alongside Body.
+func (r *WebhookTestResult) UnmarshalJSON(b []byte) error {
+	type plain WebhookTestResult
+	var v struct {
+		plain
+		Body json.RawMessage `json:"body"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	*r = WebhookTestResult(v.plain)
+	if len(v.Body) == 0 {
+		return nil
+	}
+	// The API pretty-prints responses but signs the compact body; compacting keeps key order.
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, v.Body); err != nil {
+		return err
+	}
+	r.RawBody = buf.Bytes()
+	return json.Unmarshal(v.Body, &r.Body)
 }
 
 // WebhookDelivery is one delivery attempt of a webhook event.

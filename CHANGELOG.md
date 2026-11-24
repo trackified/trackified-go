@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 - 2026-11-24
+
+- `WebhookTestResult.RawBody` holds the exact body the test signature signs, so it verifies
+  (re-encoding `Body` sorts its keys and does not).
+- Docs: a webhook created without `EventTypes` gets `tracking.updated` and `tracking.delivered`, not all
+  events; API keys look like `live_...` / `test_...`.
+
 ## 0.2.0 - 2026-11-24
 
 All changes are additive.

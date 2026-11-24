@@ -12,7 +12,7 @@ Standard library only. Requires Go 1.23+.
 ## Install
 
 ```sh
-go get github.com/trackified/trackified-go@v0.2.0
+go get github.com/trackified/trackified-go@v0.2.1
 ```
 
 ## Quickstart
@@ -33,7 +33,7 @@ func main() {
 	ctx := context.Background()
 
 	// Reads TRACKIFIED_API_KEY (and TRACKIFIED_BASE_URL) when no option is given.
-	client, err := trackified.New(trackified.WithAPIKey("tk_live_..."))
+	client, err := trackified.New(trackified.WithAPIKey("live_..."))
 	if err != nil {
 		log.Fatal(err)
 	}
