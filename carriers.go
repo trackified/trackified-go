@@ -33,6 +33,19 @@ func (s *CarriersService) Detect(ctx context.Context, trackingNumber string) (*D
 	return &r, s.c.do(ctx, http.MethodGet, "/v1/carriers/detect", url.Values{"number": {trackingNumber}}, nil, "", &r)
 }
 
+// Resolve maps a free-text carrier name ("USPS Priority Mail", "dhl_express", "Correos de España") to a
+// carrier Trackified serves. It returns nil, nil when nothing we serve matches.
+func (s *CarriersService) Resolve(ctx context.Context, name string) (*ResolveResult, error) {
+	var r ResolveResult
+	if err := s.c.do(ctx, http.MethodGet, "/v1/carriers/resolve", url.Values{"name": {name}}, nil, "", &r); err != nil {
+		return nil, err
+	}
+	if r.Carrier == "" {
+		return nil, nil
+	}
+	return &r, nil
+}
+
 // CatalogParams filters CarriersService.Catalog.
 type CatalogParams struct {
 	Query   string // name search

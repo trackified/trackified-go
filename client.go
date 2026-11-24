@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -21,7 +22,7 @@ import (
 )
 
 // Version is the SDK version, sent in the User-Agent header.
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 // DefaultBaseURL is the production API endpoint.
 const DefaultBaseURL = "https://api.trackified.net"
@@ -40,6 +41,7 @@ type Client struct {
 	httpClient *http.Client
 	maxRetries int
 	userAgent  string
+	hooks      Hooks
 }
 
 // Option configures a Client.
@@ -49,7 +51,52 @@ type Option func(*Client)
 func WithAPIKey(key string) Option { return func(c *Client) { c.apiKey = key } }
 
 // WithBaseURL overrides the API base URL. Defaults to TRACKIFIED_BASE_URL or DefaultBaseURL.
-func WithBaseURL(u string) Option { return func(c *Client) { c.baseURL = strings.TrimRight(u, "/") } }
+// Both "https://api.trackified.net" and "https://api.trackified.net/v1" work, with or without a trailing slash.
+func WithBaseURL(u string) Option { return func(c *Client) { c.baseURL = normalizeBaseURL(u) } }
+
+// normalizeBaseURL strips trailing slashes and one trailing "/v1"; request paths already start with /v1.
+func normalizeBaseURL(u string) string {
+	return strings.TrimRight(strings.TrimSuffix(strings.TrimRight(u, "/"), "/v1"), "/")
+}
+
+// RequestInfo is passed to Hooks.OnRequest before each attempt.
+type RequestInfo struct {
+	Method         string
+	URL            string
+	Attempt        int // 1 for the first try
+	IdempotencyKey string
+}
+
+// ResponseInfo is passed to Hooks.OnResponse after each attempt.
+type ResponseInfo struct {
+	Method             string
+	URL                string
+	Attempt            int // 1 for the first try
+	Status             int // 0 when the request got no response
+	RequestID          string
+	IdempotentReplayed bool
+	Duration           time.Duration
+	// Err is the typed error (e.g. *NotFoundError, *ConnectionError) when Status >= 400 or the connection failed.
+	Err error
+}
+
+// Hooks observe every request attempt, e.g. for logging or metrics. A panicking hook is recovered and ignored.
+type Hooks struct {
+	OnRequest  func(RequestInfo)
+	OnResponse func(ResponseInfo)
+}
+
+// WithHooks installs request and response hooks.
+func WithHooks(h Hooks) Option { return func(c *Client) { c.hooks = h } }
+
+// callHook runs a hook, never letting it break the request.
+func callHook[T any](f func(T), v T) {
+	if f == nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	f(v)
+}
 
 // WithTimeout sets the per-request timeout (default 30s).
 func WithTimeout(d time.Duration) Option { return func(c *Client) { c.httpClient.Timeout = d } }
@@ -75,7 +122,7 @@ func New(opts ...Option) (*Client, error) {
 		userAgent:  "trackified-go/" + Version,
 	}
 	if u := os.Getenv("TRACKIFIED_BASE_URL"); u != "" {
-		c.baseURL = strings.TrimRight(u, "/")
+		c.baseURL = normalizeBaseURL(u)
 	}
 	for _, o := range opts {
 		o(c)
@@ -133,33 +180,48 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 			req.Header.Set("Idempotency-Key", idemKey)
 		}
 
+		callHook(c.hooks.OnRequest, RequestInfo{Method: method, URL: u, Attempt: attempt + 1, IdempotencyKey: idemKey})
+		start := time.Now()
+		info := ResponseInfo{Method: method, URL: u, Attempt: attempt + 1}
 		resp, err := c.httpClient.Do(req)
 		var apiErr error
 		var wait time.Duration
 		if err != nil {
 			if ctx.Err() != nil {
+				info.Err, info.Duration = ctx.Err(), time.Since(start)
+				callHook(c.hooks.OnResponse, info)
 				return ctx.Err()
 			}
-			apiErr = &ConnectionError{&TrackifiedError{Message: err.Error(), Err: err}}
+			apiErr = newConnectionError(err)
 		} else {
+			info.Status = resp.StatusCode
+			info.RequestID = resp.Header.Get("X-Request-Id")
+			info.IdempotentReplayed = resp.Header.Get("Idempotent-Replayed") == "true"
 			data, rerr := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if rerr != nil {
-				apiErr = &ConnectionError{&TrackifiedError{Message: rerr.Error(), Err: rerr}}
+				apiErr = newConnectionError(rerr)
 			} else if resp.StatusCode < 300 {
+				info.Duration = time.Since(start)
+				callHook(c.hooks.OnResponse, info)
 				if out == nil || len(bytes.TrimSpace(data)) == 0 {
 					return nil
 				}
 				return json.Unmarshal(data, out)
 			} else {
 				apiErr = newAPIError(resp, data)
-				if !retryable(resp.StatusCode) {
-					return apiErr
-				}
-				var rl *RateLimitError
-				if errors.As(apiErr, &rl) {
-					wait = rl.RetryAfter
-				}
+			}
+		}
+		info.Err, info.Duration = apiErr, time.Since(start)
+		callHook(c.hooks.OnResponse, info)
+		var ce *ConnectionError
+		if !errors.As(apiErr, &ce) {
+			if !retryable(info.Status) {
+				return apiErr
+			}
+			var rl *RateLimitError
+			if errors.As(apiErr, &rl) {
+				wait = rl.RetryAfter
 			}
 		}
 		if attempt >= c.maxRetries {
@@ -212,8 +274,12 @@ func newAPIError(resp *http.Response, data []byte) error {
 		return &AuthenticationError{base}
 	case s == 403:
 		return &PermissionError{base}
+	case s == 402:
+		return &QuotaExceededError{base}
 	case s == 404:
 		return &NotFoundError{base}
+	case s == 409:
+		return &ConflictError{base}
 	case s == 429:
 		secs, _ := strconv.Atoi(resp.Header.Get("Retry-After"))
 		return &RateLimitError{TrackifiedError: base, RetryAfter: time.Duration(secs) * time.Second}
@@ -221,6 +287,16 @@ func newAPIError(resp *http.Response, data []byte) error {
 		return &APIError{base}
 	}
 	return base
+}
+
+// newConnectionError wraps a transport error; Code is "timeout" or "connection".
+func newConnectionError(err error) error {
+	code := "connection"
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		code = "timeout"
+	}
+	return &ConnectionError{&TrackifiedError{Code: code, Message: err.Error(), Err: err}}
 }
 
 // newIdempotencyKey returns a random UUID v4.

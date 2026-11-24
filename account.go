@@ -45,3 +45,14 @@ func (s *UsageService) Get(ctx context.Context) (*Usage, error) {
 	var u Usage
 	return &u, s.c.do(ctx, http.MethodGet, "/v1/account/usage", nil, nil, "", &u)
 }
+
+// Health is the response of Client.Health.
+type Health struct {
+	Status string `json:"status"` // "ok"
+}
+
+// Health checks that the API is up. It needs no API key. A degraded API answers 503, returned as *APIError.
+func (c *Client) Health(ctx context.Context) (*Health, error) {
+	var h Health
+	return &h, c.do(ctx, http.MethodGet, "/v1/health", nil, nil, "", &h)
+}

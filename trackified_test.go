@@ -248,4 +248,10 @@ func TestLive(t *testing.T) {
 	if _, err := c.Usage.Get(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if h, err := c.Health(ctx); err != nil || h.Status != "ok" {
+		t.Fatalf("Health = %+v, %v", h, err)
+	}
+	if r, err := c.Carriers.Resolve(ctx, "USPS Priority Mail"); err != nil || r == nil || r.Carrier != "usps" {
+		t.Fatalf("Resolve = %+v, %v", r, err)
+	}
 }

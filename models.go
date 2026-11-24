@@ -1,6 +1,9 @@
 package trackified
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // TrackingStatus is the overall state of a tracking.
 type TrackingStatus string
@@ -43,26 +46,29 @@ const (
 	EventTypeTrackingExpired       WebhookEventType = "tracking.expired"
 )
 
-// TrackingEvent is one carrier scan. Events are returned newest first.
+// TrackingEvent is one carrier scan.
 type TrackingEvent struct {
-	// OccurredAt is ISO 8601: with an offset when TimeZoneKnown, otherwise local time or a date alone.
+	// OccurredAt is ISO 8601. With an offset when the carrier gives one (then TimeZoneKnown is true);
+	// a zoneless value is the local time where the scan happened; it may also be a date alone.
 	// Empty when the carrier's time couldn't be read.
 	OccurredAt    string      `json:"occurred_at"`
 	TimeZoneKnown bool        `json:"time_zone_known"`
 	Status        EventStatus `json:"status"`
 	Description   string      `json:"description"`
 	Location      string      `json:"location"`
-	// Deprecated: use OccurredAt.
+	// Deprecated: use OccurredAt. Sent until 2027-06-01, removed after.
 	Date string `json:"date,omitempty"`
 }
 
 // Tracking is a tracked parcel.
 type Tracking struct {
-	ID                       string          `json:"id"`
-	TrackingNumber           string          `json:"tracking_number"`
-	Carrier                  string          `json:"carrier,omitempty"`
-	CarrierDetected          bool            `json:"carrier_detected"`
-	Status                   TrackingStatus  `json:"status"`
+	ID              string         `json:"id"`
+	TrackingNumber  string         `json:"tracking_number"`
+	Carrier         string         `json:"carrier,omitempty"`
+	CarrierDetected bool           `json:"carrier_detected"`
+	Status          TrackingStatus `json:"status"`
+	// Events are newest first (by OccurredAt; undated events keep the carrier's order after dated ones),
+	// guaranteed by the API.
 	Events                   []TrackingEvent `json:"events"`
 	EstimatedDelivery        string          `json:"estimated_delivery,omitempty"`
 	DeliveredAt              string          `json:"delivered_at,omitempty"`
@@ -104,8 +110,34 @@ type RetrackResult struct {
 
 // Carrier is a carrier Trackified tracks.
 type Carrier struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"display_name"`
+	ID          string   `json:"id"`
+	DisplayName string   `json:"display_name"` // decoded from display_name or displayName
+	Aliases     []string `json:"aliases"`
+}
+
+// UnmarshalJSON accepts both display_name and the deprecated displayName.
+func (c *Carrier) UnmarshalJSON(b []byte) error {
+	type plain Carrier
+	var v struct {
+		plain
+		DisplayNameCamel string `json:"displayName"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	*c = Carrier(v.plain)
+	if c.DisplayName == "" {
+		c.DisplayName = v.DisplayNameCamel
+	}
+	return nil
+}
+
+// ResolveResult is the response of CarriersService.Resolve.
+type ResolveResult struct {
+	Carrier    string  `json:"carrier"`
+	Name       string  `json:"name"`
+	Confidence float64 `json:"confidence"`
+	Matched    string  `json:"matched"` // id, alias, name, provider_slug or prefix
 }
 
 // CarrierCandidate is one guess from carrier detection.
@@ -157,15 +189,17 @@ type CarrierValidationStatus struct {
 
 // Webhook is a webhook endpoint.
 type Webhook struct {
-	ID                  string             `json:"id"`
-	URL                 string             `json:"url"`
-	EventTypes          []WebhookEventType `json:"event_types"`
-	Enabled             bool               `json:"enabled"`
-	SecretPreview       string             `json:"secret_preview,omitempty"`
-	Secret              string             `json:"secret,omitempty"` // only in the create response
-	ConsecutiveFailures int                `json:"consecutive_failures,omitempty"`
-	DisabledAt          *time.Time         `json:"disabled_at,omitempty"`
-	CreatedAt           time.Time          `json:"created_at"`
+	ID            string             `json:"id"`
+	URL           string             `json:"url"`
+	EventTypes    []WebhookEventType `json:"event_types"`
+	Enabled       bool               `json:"enabled"`
+	SecretPreview string             `json:"secret_preview,omitempty"`
+	Secret        string             `json:"secret,omitempty"` // only in the create and rotate-secret responses
+	// PreviousSecretExpiresAt is set by RotateSecret: until then deliveries are signed with both secrets.
+	PreviousSecretExpiresAt *time.Time `json:"previous_secret_expires_at,omitempty"`
+	ConsecutiveFailures     int        `json:"consecutive_failures,omitempty"`
+	DisabledAt              *time.Time `json:"disabled_at,omitempty"`
+	CreatedAt               time.Time  `json:"created_at"`
 }
 
 // WebhookTestResult is a signed sample event (not sent anywhere).

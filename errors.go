@@ -38,6 +38,13 @@ type AuthenticationError struct{ *TrackifiedError }
 // PermissionError is returned for 403 responses.
 type PermissionError struct{ *TrackifiedError }
 
+// QuotaExceededError is returned for 402 responses (code quota_exceeded): the plan's tracking limit is used up.
+type QuotaExceededError struct{ *TrackifiedError }
+
+// ConflictError is returned for 409 responses, e.g. code idempotency_in_progress when a request with the
+// same Idempotency-Key is still running. It is not retried.
+type ConflictError struct{ *TrackifiedError }
+
 // NotFoundError is returned for 404 responses.
 type NotFoundError struct{ *TrackifiedError }
 
@@ -53,12 +60,15 @@ type RateLimitError struct {
 // APIError is returned for 5xx responses.
 type APIError struct{ *TrackifiedError }
 
-// ConnectionError is returned when the request never got an HTTP response.
+// ConnectionError is returned when the request never got an HTTP response. Code is "timeout" or
+// "connection". After a timeout the outcome is unknown: retry with the same idempotency key.
 type ConnectionError struct{ *TrackifiedError }
 
 func (e *AuthenticationError) Unwrap() error { return e.TrackifiedError }
 func (e *PermissionError) Unwrap() error     { return e.TrackifiedError }
 func (e *NotFoundError) Unwrap() error       { return e.TrackifiedError }
+func (e *QuotaExceededError) Unwrap() error  { return e.TrackifiedError }
+func (e *ConflictError) Unwrap() error       { return e.TrackifiedError }
 func (e *ValidationError) Unwrap() error     { return e.TrackifiedError }
 func (e *RateLimitError) Unwrap() error      { return e.TrackifiedError }
 func (e *APIError) Unwrap() error            { return e.TrackifiedError }
